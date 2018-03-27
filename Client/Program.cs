@@ -10,15 +10,27 @@ using AIO.ACES.Models;
 using Amazon.S3;
 using Amazon.S3.Model;
 using Amazon;
+using System.Configuration;
 
 namespace Client
 {
 
     class Credentials
     {
-        //get your ConsumerKey/ConsumerSecret at http://developer.autodesk.com
-        public static string ConsumerKey = /*"put client_id"*/Environment.GetEnvironmentVariable("FORGE_CLIENT_ID") ?? "";
-        public static string ConsumerSecret = /*"put client_Secret"*/Environment.GetEnvironmentVariable("FORGE_CLIENT_SECRET")?? "";
+        /// <summary>
+        /// Reads appsettings from web.config
+        /// </summary>
+        private static string GetAppSetting(string settingKey)
+        {
+            var appSettings = ConfigurationManager.AppSettings;
+            return appSettings[settingKey];
+        }
+        //get your ConsumerKey/ConsumerSecret at http://developer.autodesk.com         
+        public static string ForgeConsumerKey = Environment.GetEnvironmentVariable("FORGE_CLIENT_ID") ?? GetAppSetting("FORGE_CLIENT_ID");
+        public static string ForgeConsumerSecret = Environment.GetEnvironmentVariable("FORGE_CLIENT_SECRET")?? GetAppSetting("FORGE_CLIENT_SECRET");
+        public static string AWSAccessKey = Environment.GetEnvironmentVariable("AWSACCESSKEY") ?? GetAppSetting("AWSACCESSKEY");
+        public static string AWSSecretKey = Environment.GetEnvironmentVariable("AWSSECRETKEY") ?? GetAppSetting("AWSSECRETKEY");
+
     }
     class Program
     {
@@ -32,9 +44,7 @@ namespace Client
             container = new Container(new Uri("https://developer.api.autodesk.com/autocad.io/us-east/v2/"));
             var token = GetToken();
             container.SendingRequest2 += (sender, e) => e.RequestMessage.SetHeader("Authorization", token);
-
-           
-
+            
             //check if our activity already exists
             Activity activity = null;
             var activityQ = container.Activities.ByKey(ActivityName);
@@ -56,8 +66,8 @@ namespace Client
             using (var client = new HttpClient())
             {
                 var values = new List<KeyValuePair<string, string>>();
-                values.Add(new KeyValuePair<string, string>("client_id", Credentials.ConsumerKey));
-                values.Add(new KeyValuePair<string, string>("client_secret", Credentials.ConsumerSecret));
+                values.Add(new KeyValuePair<string, string>("client_id", Credentials.ForgeConsumerKey));
+                values.Add(new KeyValuePair<string, string>("client_secret", Credentials.ForgeConsumerSecret));
                 values.Add(new KeyValuePair<string, string>("grant_type", "client_credentials"));
                 values.Add(new KeyValuePair<string, string>("scope", "code:all"));
                 var requestContent = new FormUrlEncodedContent(values);
@@ -111,13 +121,13 @@ namespace Client
             }
             activity.Instruction = new Instruction()
                 {
-                    Script = "_import\n\"Scafold_Bracket.stp\"\n_.saveas\n2013\nSolidAfterImport.dwg\n_.quit\n"
-            };
+                    Script = "_import\n\"Aero_Punch1.CATPart\"\n_.saveas\n2018\nSolidAfterImport.dwg\n_.quit\n"
+                };
             activity.Parameters = new Parameters()
                 {
                     InputParameters = {
                         new Parameter() { Name = "HostDwg", LocalFileName = "$(HostDwg)" },
-                        new Parameter() { Name = "StepImport", LocalFileName = "Scafold_Bracket.stp" },
+                        new Parameter() { Name = "CatImport", LocalFileName = "Aero_Punch1.CATPart" },
                     },
                     OutputParameters = { new Parameter() { Name = "Result", LocalFileName ="SolidAfterImport.dwg" } }
                 };
@@ -143,8 +153,9 @@ namespace Client
                 Arguments = new Arguments(),
                 ActivityId = activity.Id 
             };
-            string drawingResource = GeneratePreSignedURL("adn-acadio", "myDrawing");
-            string stepFileResource = GeneratePreSignedURL("adb-acadio", "Scafolf_Bracket_Asy.stp");
+
+            string drawingResource = GeneratePreSignedURL("madhukar-fda","template.dwg");
+            string stepFileResource = GeneratePreSignedURL("madhukar-fda", "Aero_Punch1.CATPart");
             wi.Arguments.InputArguments.Add(new Argument()
             {
                 Name = "HostDwg",// Must match the input parameter in activity
@@ -153,7 +164,7 @@ namespace Client
             });
             wi.Arguments.InputArguments.Add(new Argument()
             {
-                Name = "StepImport",// Must match the input parameter in activity                
+                Name = "CatImport",// Must match the input parameter in activity                
                 
                 Resource = stepFileResource,
                 StorageProvider = StorageProvider.Generic //Generic HTTP download (as opposed to A360)
@@ -190,7 +201,7 @@ namespace Client
             
             //Resource property of the output argument "Results" will have the output url
             url = wi.Arguments.OutputArguments.First(a => a.Name == "Result").Resource;
-            DownloadToDocs(url, @"Scafold_Bracket.dwg");
+            DownloadToDocs(url, @"AfterImported.dwg");
 
         }
 
@@ -209,54 +220,49 @@ namespace Client
 
         static string GeneratePreSignedURL(string bucketName, string objectKey)
         {
-            string accessKey = /*put your acces key*/ Environment.GetEnvironmentVariable("AWSACCESSKEY") ?? "";
-            string secretKey = /*put your secret key here!"*/Environment.GetEnvironmentVariable("AWSSECRETKEY") ?? "";
             string urlString = "";
             GetPreSignedUrlRequest request1 = new GetPreSignedUrlRequest
             {
                 BucketName = bucketName,
                 Key = objectKey,
-                Expires = DateTime.Now.AddMinutes(100)
+                Verb = HttpVerb.GET,
+                Expires = DateTime.Now.AddMinutes(60)
 
             };
-           request1 = request1.WithBucketName(bucketName);
 
-            AmazonS3Config s3Config = new AmazonS3Config();
-            s3Config.RegionEndpoint = RegionEndpoint.USWest2;
-
-            using (var s3Client = new AmazonS3Client(accessKey, secretKey, RegionEndpoint.USWest2))
+            try
             {
-
-                try
+                using (var s3Client = new AmazonS3Client(Amazon.RegionEndpoint.USWest2))
                 {
                     urlString = s3Client.GetPreSignedURL(request1);
-                    
                 }
-                catch (AmazonS3Exception amazonS3Exception)
+                //string url = s3Client.GetPreSignedURL(request1);
+            }
+            catch (AmazonS3Exception amazonS3Exception)
+            {
+                if (amazonS3Exception.ErrorCode != null &&
+                    (amazonS3Exception.ErrorCode.Equals("InvalidAccessKeyId")
+                    ||
+                    amazonS3Exception.ErrorCode.Equals("InvalidSecurity")))
                 {
-                    if (amazonS3Exception.ErrorCode != null &&
-                        (amazonS3Exception.ErrorCode.Equals("InvalidAccessKeyId")
-                        ||
-                        amazonS3Exception.ErrorCode.Equals("InvalidSecurity")))
-                    {
-                        Console.WriteLine("Check the provided AWS Credentials.");
-                        Console.WriteLine(
-                        "To sign up for service, go to http://aws.amazon.com/s3");
-                    }
-                    else
-                    {
-                        Console.WriteLine(
-                         "Error occurred. Message:'{0}' when listing objects",
-                         amazonS3Exception.Message);
-                    }
+                    Console.WriteLine("Check the provided AWS Credentials.");
+                    Console.WriteLine(
+                    "To sign up for service, go to http://aws.amazon.com/s3");
                 }
-                catch (Exception e)
+                else
                 {
-                    Console.WriteLine(e.Message);
+                    Console.WriteLine(
+                     "Error occurred. Message:'{0}' when listing objects",
+                     amazonS3Exception.Message);
                 }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.Message);
             }
 
             return urlString;
+
 
         }
 
